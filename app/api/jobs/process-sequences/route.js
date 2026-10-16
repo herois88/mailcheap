@@ -15,7 +15,7 @@ export const maxDuration = 300;
 async function handleProcess() {
 	await connectDb();
 	const now = new Date();
-	const due = await SequenceEnrollment.find({ status: "active", nextSendAt: { $lte: now } }).limit(30).lean();
+	const due = await SequenceEnrollment.find({ status: "active", nextSendAt: { $lte: now } }).limit(20).lean();
 
 	const results = [];
 	for (const enrollment of due) {
@@ -32,7 +32,7 @@ async function handleProcess() {
 		}
 
 		const step = sequence.steps?.[enrollment.currentStep];
-		if (!step) {
+		if (!step?.subject) {
 			await SequenceEnrollment.updateOne({ _id: enrollment._id }, { status: "completed" });
 			results.push({ id: String(enrollment._id), done: true });
 			continue;
@@ -53,9 +53,9 @@ async function handleProcess() {
 				messageIds: [String(message._id)],
 			});
 
-			console.info(`[sequence] sent step ${enrollment.currentStep} of "${sequence.name}" to ${contact.email}`);
+			console.info(`[sequence] step ${enrollment.currentStep} "${step.subject}" → ${contact.email}`);
 		} catch (err) {
-			console.error(`[sequence] send failed for ${enrollment._id}:`, err.message);
+			console.error(`[sequence] failed ${enrollment._id}:`, err.message);
 			results.push({ id: String(enrollment._id), error: err.message });
 			continue;
 		}
@@ -64,14 +64,11 @@ async function handleProcess() {
 		if (nextIndex >= (sequence.steps?.length || 0)) {
 			await SequenceEnrollment.updateOne({ _id: enrollment._id }, { status: "completed", currentStep: nextIndex });
 		} else {
-			const nextDelay = sequence.steps[nextIndex].delayDays || 0;
-			const nextSendAt = new Date(now.getTime() + nextDelay * 24 * 60 * 60 * 1000);
-			await SequenceEnrollment.updateOne(
-				{ _id: enrollment._id },
-				{ currentStep: nextIndex, nextSendAt }
-			);
+			const delay = sequence.steps[nextIndex].delayDays || 0;
+			const nextSendAt = new Date(now.getTime() + delay * 86400000);
+			await SequenceEnrollment.updateOne({ _id: enrollment._id }, { currentStep: nextIndex, nextSendAt });
 		}
-		results.push({ id: String(enrollment._id), sentStep: enrollment.currentStep });
+		results.push({ id: String(enrollment._id), sent: enrollment.currentStep });
 	}
 
 	return NextResponse.json({ processed: results.length, results });
